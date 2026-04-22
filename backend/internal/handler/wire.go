@@ -35,6 +35,7 @@ func ProvideAdminHandlers(
 	scheduledTestHandler *admin.ScheduledTestHandler,
 	channelHandler *admin.ChannelHandler,
 	salesHandler *admin.SalesHandler,
+	paymentHandler *admin.PaymentHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
 		Dashboard:             dashboardHandler,
@@ -63,6 +64,7 @@ func ProvideAdminHandlers(
 		ScheduledTest:         scheduledTestHandler,
 		Channel:               channelHandler,
 		Sales:                 salesHandler,
+		Payment:               paymentHandler,
 	}
 }
 
@@ -91,23 +93,27 @@ func ProvideHandlers(
 	settingHandler *SettingHandler,
 	totpHandler *TotpHandler,
 	salesHandler *SalesHandler,
+	paymentHandler *PaymentHandler,
+	paymentWebhookHandler *PaymentWebhookHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
 	return &Handlers{
-		Auth:          authHandler,
-		User:          userHandler,
-		APIKey:        apiKeyHandler,
-		Usage:         usageHandler,
-		Redeem:        redeemHandler,
-		Subscription:  subscriptionHandler,
-		Announcement:  announcementHandler,
-		Admin:         adminHandlers,
-		Gateway:       gatewayHandler,
-		OpenAIGateway: openaiGatewayHandler,
-		Setting:       settingHandler,
-		Totp:          totpHandler,
-		Sales:         salesHandler,
+		Auth:           authHandler,
+		User:           userHandler,
+		APIKey:         apiKeyHandler,
+		Usage:          usageHandler,
+		Redeem:         redeemHandler,
+		Subscription:   subscriptionHandler,
+		Announcement:   announcementHandler,
+		Admin:          adminHandlers,
+		Gateway:        gatewayHandler,
+		OpenAIGateway:  openaiGatewayHandler,
+		Setting:        settingHandler,
+		Totp:           totpHandler,
+		Sales:          salesHandler,
+		Payment:        paymentHandler,
+		PaymentWebhook: paymentWebhookHandler,
 	}
 }
 
@@ -126,6 +132,8 @@ var ProviderSet = wire.NewSet(
 	NewTotpHandler,
 	NewSalesHandler,
 	ProvideSettingHandler,
+	NewPaymentHandler,
+	NewPaymentWebhookHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -153,6 +161,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
 	admin.NewChannelHandler,
+	admin.NewPaymentHandler,
 	admin.NewSalesHandler,
 
 	// AdminHandlers and Handlers constructors

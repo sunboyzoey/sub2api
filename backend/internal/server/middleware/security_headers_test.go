@@ -17,6 +17,17 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
+func extractDirectiveValue(policy, directive string) string {
+	for _, part := range strings.Split(policy, ";") {
+		part = strings.TrimSpace(part)
+		prefix := directive + " "
+		if strings.HasPrefix(part, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(part, prefix))
+		}
+	}
+	return ""
+}
+
 func TestGenerateNonce(t *testing.T) {
 	t.Run("generates_valid_base64_string", func(t *testing.T) {
 		nonce, err := GenerateNonce()
@@ -145,7 +156,10 @@ func TestSecurityHeaders(t *testing.T) {
 		middleware(c)
 
 		csp := w.Header().Get("Content-Security-Policy")
-		assert.Contains(t, csp, "frame-src https://challenges.cloudflare.com 'self'")
+		frameSrc := extractDirectiveValue(csp, "frame-src")
+		assert.Contains(t, frameSrc, "https://challenges.cloudflare.com")
+		assert.Contains(t, frameSrc, StripeDomain)
+		assert.Contains(t, frameSrc, "'self'")
 		assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
 	})
 
@@ -163,8 +177,10 @@ func TestSecurityHeaders(t *testing.T) {
 		middleware(c)
 
 		csp := w.Header().Get("Content-Security-Policy")
-		assert.Contains(t, csp, "frame-src https://challenges.cloudflare.com;")
-		assert.NotContains(t, csp, "frame-src https://challenges.cloudflare.com 'self'")
+		frameSrc := extractDirectiveValue(csp, "frame-src")
+		assert.Contains(t, frameSrc, "https://challenges.cloudflare.com")
+		assert.Contains(t, frameSrc, StripeDomain)
+		assert.NotContains(t, frameSrc, "'self'")
 	})
 
 	t.Run("api_route_skips_csp_nonce_generation", func(t *testing.T) {

@@ -125,6 +125,22 @@ func (s *groupRepoStubForAdmin) UpdateSortOrders(_ context.Context, _ []GroupSor
 	return nil
 }
 
+func TestAdminService_ListGroups_PassesSortParams(t *testing.T) {
+	repo := &groupRepoStubForAdmin{
+		listWithFiltersGroups: []Group{{ID: 1, Name: "g1"}},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	_, _, err := svc.ListGroups(context.Background(), 3, 25, PlatformOpenAI, StatusActive, "needle", nil, "account_count", "ASC")
+	require.NoError(t, err)
+	require.Equal(t, pagination.PaginationParams{
+		Page:      3,
+		PageSize:  25,
+		SortBy:    "account_count",
+		SortOrder: "ASC",
+	}, repo.listWithFiltersParams)
+}
+
 // TestAdminService_CreateGroup_WithImagePricing 测试创建分组时 ImagePrice 字段正确传递
 func TestAdminService_CreateGroup_WithImagePricing(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}
@@ -373,7 +389,7 @@ func TestAdminService_ListGroups_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{groupRepo: repo}
 
-		groups, total, err := svc.ListGroups(context.Background(), 1, 20, "", "", "alpha", nil)
+		groups, total, err := svc.ListGroups(context.Background(), 1, 20, "", "", "alpha", nil, "", "")
 		require.NoError(t, err)
 		require.Equal(t, int64(1), total)
 		require.Equal(t, []Group{{ID: 1, Name: "alpha"}}, groups)
@@ -391,7 +407,7 @@ func TestAdminService_ListGroups_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{groupRepo: repo}
 
-		groups, total, err := svc.ListGroups(context.Background(), 2, 10, "", "", "", nil)
+		groups, total, err := svc.ListGroups(context.Background(), 2, 10, "", "", "", nil, "", "")
 		require.NoError(t, err)
 		require.Empty(t, groups)
 		require.Equal(t, int64(0), total)
@@ -410,7 +426,7 @@ func TestAdminService_ListGroups_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{groupRepo: repo}
 
-		groups, total, err := svc.ListGroups(context.Background(), 3, 50, PlatformAntigravity, StatusActive, "beta", &isExclusive)
+		groups, total, err := svc.ListGroups(context.Background(), 3, 50, PlatformAntigravity, StatusActive, "beta", &isExclusive, "", "")
 		require.NoError(t, err)
 		require.Equal(t, int64(42), total)
 		require.Equal(t, []Group{{ID: 2, Name: "beta"}}, groups)
@@ -605,6 +621,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsUnsupportedPlatfo
 	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformOpenAI,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -625,6 +642,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsSubscription(t *t
 	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAnthropic,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeSubscription,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -679,6 +697,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsFallbackGroup(t *
 			_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 				Name:                            "g1",
 				Platform:                        PlatformAnthropic,
+				RateMultiplier:                  1.0,
 				SubscriptionType:                SubscriptionTypeStandard,
 				FallbackGroupIDOnInvalidRequest: &fallbackID,
 			})
@@ -697,6 +716,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackNotFound(t *testing.T) {
 	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAnthropic,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -717,6 +737,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackAllowsAntigravity(t *tes
 	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAntigravity,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -734,6 +755,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackClearsOnZero(t *testing.
 	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAnthropic,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &zero,
 	})
