@@ -84,6 +84,7 @@ func RegisterAuthRoutes(
 	settings := v1.Group("/settings")
 	{
 		settings.GET("/public", h.Setting.GetPublicSettings)
+		settings.GET("/pool-status", h.Setting.GetPoolStatus)
 	}
 
 	// 需要认证的当前用户信息

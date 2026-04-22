@@ -479,6 +479,25 @@ func TestExtractSystemMessagesFromInput(t *testing.T) {
 		require.True(t, result)
 		require.Equal(t, "Extracted.\n\nExisting instructions.", reqBody["instructions"])
 	})
+
+	t.Run("developer messages also extracted", func(t *testing.T) {
+		reqBody := map[string]any{
+			"input": []any{
+				map[string]any{"role": "developer", "content": "Follow repo conventions."},
+				map[string]any{"role": "user", "content": "hi"},
+			},
+		}
+		result := extractSystemMessagesFromInput(reqBody)
+		require.True(t, result)
+		require.Equal(t, "Follow repo conventions.", reqBody["instructions"])
+
+		input, ok := reqBody["input"].([]any)
+		require.True(t, ok)
+		require.Len(t, input, 1)
+		msg, ok := input[0].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "user", msg["role"])
+	})
 }
 
 func TestApplyCodexOAuthTransform_ExtractsSystemMessages(t *testing.T) {

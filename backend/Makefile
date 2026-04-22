@@ -2,9 +2,16 @@
 
 VERSION ?= $(shell tr -d '\r\n' < ./cmd/server/VERSION)
 LDFLAGS ?= -s -w -X main.Version=$(VERSION)
+BUILD_TAGS ?= embed
+
+GO_BUILD_ARGS := -ldflags="$(LDFLAGS)" -trimpath -o bin/server ./cmd/server
+
+ifneq ($(strip $(BUILD_TAGS)),)
+GO_BUILD_ARGS := -tags $(strip $(BUILD_TAGS)) $(GO_BUILD_ARGS)
+endif
 
 build:
-	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -trimpath -o bin/server ./cmd/server
+	CGO_ENABLED=0 go build $(GO_BUILD_ARGS)
 
 generate:
 	go generate ./ent

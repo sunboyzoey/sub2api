@@ -63,12 +63,13 @@ func setupAdminRouter() (*gin.Engine, *stubAdminService) {
 }
 
 func TestUserHandlerEndpoints(t *testing.T) {
-	router, _ := setupAdminRouter()
+	router, adminSvc := setupAdminRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users?page=1&page_size=20", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, adminSvc.lastUserListFilters.ExcludeSalesShadowUsers)
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/users/1", nil)

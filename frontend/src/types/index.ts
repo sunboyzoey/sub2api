@@ -116,6 +116,36 @@ export interface PublicSettings {
   version: string
 }
 
+export interface PoolStatusOverview {
+  total_accounts: number
+  available_accounts: number
+  rate_limited_accounts: number
+  overloaded_accounts: number
+  temp_unschedulable_accounts: number
+  paused_accounts: number
+  error_accounts: number
+  disabled_accounts: number
+  availability_ratio: number
+}
+
+export interface PoolStatusPlatform extends PoolStatusOverview {
+  platform: string
+}
+
+export interface PoolStatusGroup extends PoolStatusOverview {
+  group_id: number
+  group_name: string
+  platform: string
+  description: string
+}
+
+export interface PoolStatusSummary {
+  generated_at: string
+  overview: PoolStatusOverview
+  platforms: PoolStatusPlatform[]
+  groups: PoolStatusGroup[]
+}
+
 export interface AuthResponse {
   access_token: string
   refresh_token?: string  // New: Refresh Token for token renewal

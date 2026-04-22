@@ -11,13 +11,15 @@ import (
 // SettingHandler 公开设置处理器（无需认证）
 type SettingHandler struct {
 	settingService *service.SettingService
+	poolStatus     *service.PoolStatusService
 	version        string
 }
 
 // NewSettingHandler 创建公开设置处理器
-func NewSettingHandler(settingService *service.SettingService, version string) *SettingHandler {
+func NewSettingHandler(settingService *service.SettingService, poolStatus *service.PoolStatusService, version string) *SettingHandler {
 	return &SettingHandler{
 		settingService: settingService,
+		poolStatus:     poolStatus,
 		version:        version,
 	}
 }
@@ -59,4 +61,22 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		BackendModeEnabled:               settings.BackendModeEnabled,
 		Version:                          h.version,
 	})
+}
+
+// GetPoolStatus 获取公开账号池状态
+// GET /api/v1/settings/pool-status
+func (h *SettingHandler) GetPoolStatus(c *gin.Context) {
+	if h.poolStatus == nil {
+		response.InternalError(c, "Pool status service unavailable")
+		return
+	}
+
+	summary, err := h.poolStatus.GetSummary(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, summary)
 }

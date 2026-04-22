@@ -88,6 +88,9 @@ func RegisterAdminRoutes(
 
 		// 渠道管理
 		registerChannelRoutes(admin, h)
+
+		// 销售对接
+		registerSalesRoutes(admin, h)
 	}
 }
 
@@ -556,5 +559,53 @@ func registerChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		channels.POST("", h.Admin.Channel.Create)
 		channels.PUT("/:id", h.Admin.Channel.Update)
 		channels.DELETE("/:id", h.Admin.Channel.Delete)
+	}
+}
+
+func registerSalesRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	sales := admin.Group("/sales")
+	{
+		partners := sales.Group("/partners")
+		{
+			partners.GET("", h.Admin.Sales.ListPartners)
+			partners.GET("/:id", h.Admin.Sales.GetPartner)
+			partners.POST("", h.Admin.Sales.CreatePartner)
+			partners.PUT("/:id", h.Admin.Sales.UpdatePartner)
+			partners.POST("/:id/rotate-secret", h.Admin.Sales.RotatePartnerSecret)
+			partners.DELETE("/:id", h.Admin.Sales.DeletePartner)
+		}
+
+		packages := sales.Group("/packages")
+		{
+			packages.GET("", h.Admin.Sales.ListPackages)
+			packages.GET("/:id", h.Admin.Sales.GetPackage)
+			packages.POST("", h.Admin.Sales.CreatePackage)
+			packages.PUT("/:id", h.Admin.Sales.UpdatePackage)
+			packages.DELETE("/:id", h.Admin.Sales.DeletePackage)
+		}
+
+		mappings := sales.Group("/mappings")
+		{
+			mappings.GET("", h.Admin.Sales.ListMappings)
+			mappings.POST("", h.Admin.Sales.UpsertMapping)
+			mappings.DELETE("/:id", h.Admin.Sales.DeleteMapping)
+		}
+
+		bindings := sales.Group("/bindings")
+		{
+			bindings.GET("", h.Admin.Sales.ListBindings)
+			bindings.GET("/:id", h.Admin.Sales.GetBinding)
+			bindings.POST("", h.Admin.Sales.UpsertBinding)
+			bindings.DELETE("/:id", h.Admin.Sales.DeleteBinding)
+		}
+
+		orders := sales.Group("/orders")
+		{
+			orders.GET("", h.Admin.Sales.ListOrders)
+			orders.GET("/:id", h.Admin.Sales.GetOrder)
+			orders.POST("/batch-delete", h.Admin.Sales.BatchDeleteOrders)
+			orders.DELETE("/:id", h.Admin.Sales.DeleteOrder)
+			orders.POST("/provision", h.Admin.Sales.ProvisionOrder)
+		}
 	}
 }

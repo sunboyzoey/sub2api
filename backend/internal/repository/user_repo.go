@@ -197,6 +197,16 @@ func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.
 			),
 		)
 	}
+	if filters.ExcludeSalesShadowUsers {
+		q = q.Where(
+			dbuser.Not(
+				dbuser.Or(
+					dbuser.EmailHasSuffix(service.SalesShadowUserEmailSuffix),
+					dbuser.NotesContainsFold(service.SalesShadowUserNotesMarker),
+				),
+			),
+		)
+	}
 
 	if filters.GroupName != "" {
 		q = q.Where(dbuser.HasAllowedGroupsWith(

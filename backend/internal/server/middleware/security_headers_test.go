@@ -131,6 +131,42 @@ func TestSecurityHeaders(t *testing.T) {
 		assert.Contains(t, csp, CloudflareInsightsDomain)
 	})
 
+	t.Run("home_route_allows_same_origin_frame_src", func(t *testing.T) {
+		cfg := config.CSPConfig{
+			Enabled: true,
+			Policy:  config.DefaultCSPPolicy,
+		}
+		middleware := SecurityHeaders(cfg, nil)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/home", nil)
+
+		middleware(c)
+
+		csp := w.Header().Get("Content-Security-Policy")
+		assert.Contains(t, csp, "frame-src https://challenges.cloudflare.com 'self'")
+		assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
+	})
+
+	t.Run("non_home_route_does_not_allow_same_origin_frame_src", func(t *testing.T) {
+		cfg := config.CSPConfig{
+			Enabled: true,
+			Policy:  config.DefaultCSPPolicy,
+		}
+		middleware := SecurityHeaders(cfg, nil)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+		middleware(c)
+
+		csp := w.Header().Get("Content-Security-Policy")
+		assert.Contains(t, csp, "frame-src https://challenges.cloudflare.com;")
+		assert.NotContains(t, csp, "frame-src https://challenges.cloudflare.com 'self'")
+	})
+
 	t.Run("api_route_skips_csp_nonce_generation", func(t *testing.T) {
 		cfg := config.CSPConfig{
 			Enabled: true,
@@ -361,6 +397,24 @@ func TestAddToDirective(t *testing.T) {
 
 		assert.Contains(t, result, "script-src")
 		assert.Contains(t, result, "https://example.com")
+	})
+}
+
+func TestAllowsSameOriginFrameSrc(t *testing.T) {
+	t.Run("home_route_returns_true", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/home", nil)
+
+		assert.True(t, allowsSameOriginFrameSrc(c))
+	})
+
+	t.Run("other_routes_return_false", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+
+		assert.False(t, allowsSameOriginFrameSrc(c))
 	})
 }
 

@@ -120,6 +120,15 @@ const routes: RouteRecordRaw[] = [
       title: 'Key Usage',
     }
   },
+  {
+    path: '/pool-status',
+    name: 'PoolStatus',
+    component: () => import('@/views/PoolStatusView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: '账号池状态'
+    }
+  },
 
   // ==================== User Routes ====================
   {
@@ -285,6 +294,16 @@ const routes: RouteRecordRaw[] = [
       title: 'Channel Management',
       titleKey: 'admin.channels.title',
       descriptionKey: 'admin.channels.description'
+    }
+  },
+  {
+    path: '/admin/sales',
+    name: 'AdminSales',
+    component: () => import('@/views/admin/SalesView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: '渠道订单'
     }
   },
   {

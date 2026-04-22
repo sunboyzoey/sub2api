@@ -61,9 +61,21 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 				}
 			}
 		}
+		if allowsSameOriginFrameSrc(c) {
+			finalPolicy = addToDirective(finalPolicy, "frame-src", "'self'")
+		}
+
+		allowSameOriginEmbed := isEmbeddableRoutePath(c)
+		if allowSameOriginEmbed {
+			finalPolicy = setDirective(finalPolicy, "frame-ancestors", "'self'")
+		}
 
 		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-Frame-Options", "DENY")
+		if allowSameOriginEmbed {
+			c.Header("X-Frame-Options", "SAMEORIGIN")
+		} else {
+			c.Header("X-Frame-Options", "DENY")
+		}
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		if isAPIRoutePath(c) {
 			c.Next()
@@ -95,6 +107,30 @@ func isAPIRoutePath(c *gin.Context) bool {
 		strings.HasPrefix(path, "/v1beta/") ||
 		strings.HasPrefix(path, "/antigravity/") ||
 		strings.HasPrefix(path, "/responses")
+}
+
+func isEmbeddableRoutePath(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	switch c.Request.URL.Path {
+	case "/pool-status":
+		return true
+	default:
+		return false
+	}
+}
+
+func allowsSameOriginFrameSrc(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	switch c.Request.URL.Path {
+	case "/home":
+		return true
+	default:
+		return false
+	}
 }
 
 // enhanceCSPPolicy ensures the CSP policy includes nonce support and Cloudflare Insights domain.
@@ -147,4 +183,20 @@ func addToDirective(policy, directive, value string) string {
 	// Insert value before the semicolon
 	insertPos := idx + endIdx
 	return policy[:insertPos] + " " + value + policy[insertPos:]
+}
+
+func setDirective(policy, directive, value string) string {
+	directivePrefix := directive + " "
+	idx := strings.Index(policy, directivePrefix)
+	if idx == -1 {
+		return addToDirective(policy, directive, value)
+	}
+
+	endIdx := strings.Index(policy[idx:], ";")
+	if endIdx == -1 {
+		return policy[:idx] + directive + " " + value
+	}
+
+	insertEnd := idx + endIdx
+	return policy[:idx] + directive + " " + value + policy[insertEnd:]
 }

@@ -1,7 +1,8 @@
 .PHONY: build build-backend build-frontend build-datamanagementd test test-backend test-frontend test-datamanagementd secret-scan
 
 # 一键编译前后端
-build: build-backend build-frontend
+# 先编译前端，再编译带 embed 标签的后端，确保前端资源被嵌入二进制。
+build: build-frontend build-backend
 
 # 编译后端（复用 backend/Makefile）
 build-backend:
