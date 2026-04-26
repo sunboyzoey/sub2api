@@ -1,12 +1,17 @@
 package admin
 
 import (
+	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -69,7 +74,13 @@ func setupAccountDataRouter() (*gin.Engine, *stubAdminService) {
 
 	router.GET("/api/v1/admin/accounts/data", h.ExportData)
 	router.POST("/api/v1/admin/accounts/data", h.ImportData)
+	router.POST("/api/v1/admin/accounts/data/upload", h.ImportDataUpload)
 	return router, adminSvc
+}
+
+type dataImportResultResponse struct {
+	Code int              `json:"code"`
+	Data DataImportResult `json:"data"`
 }
 
 func TestExportDataIncludesSecrets(t *testing.T) {
@@ -274,4 +285,185 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.Len(t, adminSvc.createdProxies, 0)
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
+}
+
+func TestImportDataUploadConvertsCPAZipAndAppliesExplicitTemplateAccount(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	rateMultiplier := 1.75
+	adminSvc.accounts = []service.Account{
+		{
+			ID:                 999,
+			Name:               "template@outlook.com",
+			Platform:           service.PlatformOpenAI,
+			Type:               service.AccountTypeOAuth,
+			GroupIDs:           []int64{2, 3, 4, 5},
+			Concurrency:        7,
+			Priority:           9,
+			RateMultiplier:     &rateMultiplier,
+			AutoPauseOnExpired: false,
+			Status:             service.StatusActive,
+		},
+	}
+
+	zipBytes := buildTestCPAZip(t, map[string]cpaOAuthSource{
+		"oauth/sub_demo_outlook.com.json": {
+			Email:        "demo@outlook.com",
+			AccountID:    "acc-123",
+			AccessToken:  buildTestJWT(map[string]any{"exp": 1778069305, "client_id": openai.ClientID}),
+			RefreshToken: "rt_demo",
+			IDToken: buildTestJWT(map[string]any{
+				"email": "demo@outlook.com",
+				"name":  "Demo User",
+				"https://api.openai.com/auth": map[string]any{
+					"chatgpt_account_id":                "acc-123",
+					"chatgpt_user_id":                   "user-123",
+					"chatgpt_plan_type":                 "plus",
+					"chatgpt_subscription_active_until": "2026-05-26T11:43:19+00:00",
+					"organizations": []map[string]any{
+						{"id": "org-123", "is_default": true},
+					},
+				},
+			}),
+			GeneratedAt: "2026-04-26T12:08:25Z",
+			OAuthTokenResponse: map[string]any{
+				"token_type": "bearer",
+				"expires_in": 864000,
+				"scope":      "openid profile email offline_access",
+			},
+		},
+	})
+
+	body, contentType := buildMultipartUpload(t, "file", "masters.zip", zipBytes, map[string]string{
+		"include_email_domains":   "outlook.com",
+		"skip_default_group_bind": "true",
+		"template_account_id":     "999",
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data/upload", body)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, adminSvc.createdAccounts, 1)
+	created := adminSvc.createdAccounts[0]
+	require.Equal(t, "demo@outlook.com", created.Name)
+	require.Equal(t, service.PlatformOpenAI, created.Platform)
+	require.Equal(t, service.AccountTypeOAuth, created.Type)
+	require.True(t, created.SkipDefaultGroupBind)
+	require.Equal(t, []int64{2, 3, 4, 5}, created.GroupIDs)
+	require.Equal(t, 7, created.Concurrency)
+	require.Equal(t, 9, created.Priority)
+	require.NotNil(t, created.RateMultiplier)
+	require.Equal(t, 1.75, *created.RateMultiplier)
+	require.NotNil(t, created.AutoPauseOnExpired)
+	require.False(t, *created.AutoPauseOnExpired)
+	require.Equal(t, "training_off", created.Extra["privacy_mode"])
+	require.Equal(t, true, created.Extra["openai_passthrough"])
+	require.Equal(t, "plus", created.Credentials["plan_type"])
+	require.Equal(t, "Imported from masters.zip", *created.Notes)
+
+	var resp dataImportResultResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "cpa-zip", resp.Data.SourceFormat)
+	require.Equal(t, 1, resp.Data.SourceAccountTotal)
+	require.Equal(t, 1, resp.Data.AccountCreated)
+	require.Equal(t, 0, resp.Data.AccountSkippedExisting)
+}
+
+func TestImportDataUploadFiltersDomainsAndSkipsExisting(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	adminSvc.accounts = []service.Account{
+		{
+			ID:       998,
+			Name:     "exist@outlook.com",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+		},
+	}
+
+	zipBytes := buildTestCPAZip(t, map[string]cpaOAuthSource{
+		"oauth/exist_outlook.json": {
+			Email:        "exist@outlook.com",
+			AccountID:    "acc-exist",
+			AccessToken:  buildTestJWT(map[string]any{"exp": 1778069305, "client_id": openai.ClientID}),
+			RefreshToken: "rt_exist",
+			IDToken:      buildTestJWT(map[string]any{"email": "exist@outlook.com"}),
+			GeneratedAt:  "2026-04-26T12:08:25Z",
+		},
+		"oauth/other_domain.json": {
+			Email:        "other@example.com",
+			AccountID:    "acc-other",
+			AccessToken:  buildTestJWT(map[string]any{"exp": 1778069305, "client_id": openai.ClientID}),
+			RefreshToken: "rt_other",
+			IDToken:      buildTestJWT(map[string]any{"email": "other@example.com"}),
+			GeneratedAt:  "2026-04-26T12:08:25Z",
+		},
+		"oauth/new_outlook.json": {
+			Email:        "new@outlook.com",
+			AccountID:    "acc-new",
+			AccessToken:  buildTestJWT(map[string]any{"exp": 1778069305, "client_id": openai.ClientID}),
+			RefreshToken: "rt_new",
+			IDToken:      buildTestJWT(map[string]any{"email": "new@outlook.com"}),
+			GeneratedAt:  "2026-04-26T12:08:25Z",
+		},
+	})
+
+	body, contentType := buildMultipartUpload(t, "file", "masters.zip", zipBytes, map[string]string{
+		"include_email_domains": "outlook.com",
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data/upload", body)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, adminSvc.createdAccounts, 1)
+	require.Equal(t, "new@outlook.com", adminSvc.createdAccounts[0].Name)
+
+	var resp dataImportResultResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 1, resp.Data.AccountCreated)
+	require.Equal(t, 1, resp.Data.AccountSkippedExisting)
+	require.Equal(t, 2, resp.Data.SourceAccountFiltered)
+}
+
+func buildMultipartUpload(t *testing.T, fieldName, fileName string, content []byte, formFields map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range formFields {
+		require.NoError(t, writer.WriteField(key, value))
+	}
+	part, err := writer.CreateFormFile(fieldName, fileName)
+	require.NoError(t, err)
+	_, err = part.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	return &body, writer.FormDataContentType()
+}
+
+func buildTestCPAZip(t *testing.T, files map[string]cpaOAuthSource) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, payload := range files {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		raw, err := json.Marshal(payload)
+		require.NoError(t, err)
+		_, err = w.Write(raw)
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+func buildTestJWT(payload map[string]any) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body, _ := json.Marshal(payload)
+	claims := base64.RawURLEncoding.EncodeToString(body)
+	return strings.Join([]string{header, claims, "sig"}, ".")
 }

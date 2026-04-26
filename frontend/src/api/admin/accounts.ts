@@ -544,6 +544,32 @@ export async function importData(payload: {
   return data
 }
 
+export async function importDataUpload(payload: {
+  file: File
+  skip_default_group_bind?: boolean
+  include_email_domains?: string[]
+  template_account_id?: number
+}): Promise<AdminDataImportResult> {
+  const formData = new FormData()
+  formData.append('file', payload.file)
+  if (typeof payload.skip_default_group_bind === 'boolean') {
+    formData.append('skip_default_group_bind', String(payload.skip_default_group_bind))
+  }
+  if (payload.include_email_domains && payload.include_email_domains.length > 0) {
+    formData.append('include_email_domains', payload.include_email_domains.join(','))
+  }
+  if (typeof payload.template_account_id === 'number' && payload.template_account_id > 0) {
+    formData.append('template_account_id', String(payload.template_account_id))
+  }
+  const { data } = await apiClient.post<AdminDataImportResult>('/admin/accounts/data/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    },
+    timeout: 120000
+  })
+  return data
+}
+
 /**
  * Get Antigravity default model mapping from backend
  * @returns Default model mapping (from -> to)
@@ -660,6 +686,7 @@ export const accountsAPI = {
   syncFromCrs,
   exportData,
   importData,
+  importDataUpload,
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,

@@ -25,7 +25,9 @@
             <div class="truncate text-sm text-gray-700 dark:text-dark-200">
               {{ fileName || t('admin.accounts.dataImportSelectFile') }}
             </div>
-            <div class="text-xs text-gray-500 dark:text-dark-400">JSON (.json)</div>
+            <div class="text-xs text-gray-500 dark:text-dark-400">
+              {{ t('admin.accounts.dataImportFileTypes') }}
+            </div>
           </div>
           <button type="button" class="btn btn-secondary shrink-0" @click="openFilePicker">
             {{ t('common.chooseFile') }}
@@ -35,9 +37,39 @@
           ref="fileInput"
           type="file"
           class="hidden"
-          accept="application/json,.json"
+          accept="application/json,.json,application/zip,.zip"
           @change="handleFileChange"
         />
+      </div>
+
+      <div>
+        <label class="input-label">{{ t('admin.accounts.dataImportDomainFilter') }}</label>
+        <input
+          v-model="includeEmailDomains"
+          type="text"
+          class="input"
+          :placeholder="t('admin.accounts.dataImportDomainFilterPlaceholder')"
+        />
+        <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+          {{ t('admin.accounts.dataImportDomainFilterHint') }}
+        </div>
+      </div>
+
+      <div>
+        <label class="input-label">{{ t('admin.accounts.dataImportTemplateAccount') }}</label>
+        <select v-model="templateAccountId" class="input" :disabled="templateAccountsLoading">
+          <option value="">{{ t('admin.accounts.dataImportTemplateAccountAuto') }}</option>
+          <option
+            v-for="option in templateAccountOptions"
+            :key="option.id"
+            :value="String(option.id)"
+          >
+            {{ option.label }}
+          </option>
+        </select>
+        <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+          {{ t('admin.accounts.dataImportTemplateAccountHint') }}
+        </div>
       </div>
 
       <div
@@ -90,7 +122,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { AdminDataImportResult } from '@/types'
+import type { Account, AdminDataImportResult, AdminDataPayload } from '@/types'
 
 interface Props {
   show: boolean
@@ -110,24 +142,15 @@ const appStore = useAppStore()
 const importing = ref(false)
 const file = ref<File | null>(null)
 const result = ref<AdminDataImportResult | null>(null)
+const includeEmailDomains = ref('')
+const templateAccountId = ref('')
+const templateAccountsLoading = ref(false)
+const templateAccountOptions = ref<Array<{ id: number; label: string }>>([])
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const fileName = computed(() => file.value?.name || '')
 
 const errorItems = computed(() => result.value?.errors || [])
-
-watch(
-  () => props.show,
-  (open) => {
-    if (open) {
-      file.value = null
-      result.value = null
-      if (fileInput.value) {
-        fileInput.value.value = ''
-      }
-    }
-  }
-)
 
 const openFilePicker = () => {
   fileInput.value?.click()
@@ -142,6 +165,69 @@ const handleClose = () => {
   if (importing.value) return
   emit('close')
 }
+
+const isZipFile = (sourceFile: File): boolean => {
+  const lowerName = sourceFile.name.toLowerCase()
+  return lowerName.endsWith('.zip') || sourceFile.type === 'application/zip'
+}
+
+const looksLikeAdminDataPayload = (value: unknown): value is AdminDataPayload => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const payload = value as Record<string, unknown>
+  return Array.isArray(payload.accounts) && Array.isArray(payload.proxies)
+}
+
+const parseEmailDomains = (value: string): string[] =>
+  value
+    .split(/[,\n;\t]/g)
+    .map((item) => item.trim().toLowerCase())
+    .filter((item, index, array) => item.length > 0 && array.indexOf(item) === index)
+
+const formatTemplateAccountOption = (account: Account): { id: number; label: string } => {
+  const groupText = Array.isArray(account.groups) && account.groups.length > 0
+    ? account.groups.map((group) => group.name).join('/')
+    : 'ungrouped'
+  return {
+    id: account.id,
+    label: `${account.id} | ${account.name} | ${groupText}`
+  }
+}
+
+const loadTemplateAccountOptions = async () => {
+  templateAccountsLoading.value = true
+  try {
+    const page = await adminAPI.accounts.list(1, 100, {
+      platform: 'openai',
+      type: 'oauth',
+      sort_by: 'created_at',
+      sort_order: 'desc'
+    })
+    templateAccountOptions.value = page.items.map(formatTemplateAccountOption)
+  } catch {
+    templateAccountOptions.value = []
+  } finally {
+    templateAccountsLoading.value = false
+  }
+}
+
+watch(
+  () => props.show,
+  (open) => {
+    if (open) {
+      file.value = null
+      result.value = null
+      includeEmailDomains.value = ''
+      templateAccountId.value = ''
+      if (fileInput.value) {
+        fileInput.value.value = ''
+      }
+      void loadTemplateAccountOptions()
+    }
+  },
+  { immediate: true }
+)
 
 const readFileAsText = async (sourceFile: File): Promise<string> => {
   if (typeof sourceFile.text === 'function') {
@@ -169,18 +255,32 @@ const handleImport = async () => {
 
   importing.value = true
   try {
-    const text = await readFileAsText(file.value)
-    const dataPayload = JSON.parse(text)
+    const uploadPayload = {
+      file: file.value,
+      skip_default_group_bind: true,
+      include_email_domains: parseEmailDomains(includeEmailDomains.value),
+      template_account_id: templateAccountId.value ? Number(templateAccountId.value) : undefined
+    }
 
-    const res = await adminAPI.accounts.importData({
-      data: dataPayload,
-      skip_default_group_bind: true
-    })
+    const res = isZipFile(file.value)
+      ? await adminAPI.accounts.importDataUpload(uploadPayload)
+      : await (async () => {
+          const text = await readFileAsText(file.value as File)
+          const parsed = JSON.parse(text)
+          if (looksLikeAdminDataPayload(parsed)) {
+            return adminAPI.accounts.importData({
+              data: parsed,
+              skip_default_group_bind: true
+            })
+          }
+          return adminAPI.accounts.importDataUpload(uploadPayload)
+        })()
 
     result.value = res
 
     const msgParams: Record<string, unknown> = {
       account_created: res.account_created,
+      account_skipped_existing: res.account_skipped_existing || 0,
       account_failed: res.account_failed,
       proxy_created: res.proxy_created,
       proxy_reused: res.proxy_reused,

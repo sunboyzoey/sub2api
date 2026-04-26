@@ -1064,7 +1064,7 @@ export interface UpdateProxyRequest {
 export interface AdminDataPayload {
   type?: string
   version?: number
-  exported_at: string
+  exported_at?: string
   proxies: AdminDataProxy[]
   accounts: AdminDataAccount[]
 }
@@ -1090,6 +1090,7 @@ export interface AdminDataAccount {
   proxy_key?: string | null
   concurrency: number
   priority: number
+  group_ids?: number[]
   rate_multiplier?: number | null
   expires_at?: number | null
   auto_pause_on_expired?: boolean
@@ -1107,7 +1108,12 @@ export interface AdminDataImportResult {
   proxy_reused: number
   proxy_failed: number
   account_created: number
+  account_skipped_existing?: number
   account_failed: number
+  source_format?: string
+  source_account_total?: number
+  source_account_filtered?: number
+  source_account_invalid?: number
   errors?: AdminDataImportError[]
 }
 

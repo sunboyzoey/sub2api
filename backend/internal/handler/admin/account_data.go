@@ -53,6 +53,7 @@ type DataAccount struct {
 	ProxyKey           *string        `json:"proxy_key,omitempty"`
 	Concurrency        int            `json:"concurrency"`
 	Priority           int            `json:"priority"`
+	GroupIDs           []int64        `json:"group_ids,omitempty"`
 	RateMultiplier     *float64       `json:"rate_multiplier,omitempty"`
 	ExpiresAt          *int64         `json:"expires_at,omitempty"`
 	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired,omitempty"`
@@ -64,12 +65,17 @@ type DataImportRequest struct {
 }
 
 type DataImportResult struct {
-	ProxyCreated   int               `json:"proxy_created"`
-	ProxyReused    int               `json:"proxy_reused"`
-	ProxyFailed    int               `json:"proxy_failed"`
-	AccountCreated int               `json:"account_created"`
-	AccountFailed  int               `json:"account_failed"`
-	Errors         []DataImportError `json:"errors,omitempty"`
+	ProxyCreated           int               `json:"proxy_created"`
+	ProxyReused            int               `json:"proxy_reused"`
+	ProxyFailed            int               `json:"proxy_failed"`
+	AccountCreated         int               `json:"account_created"`
+	AccountSkippedExisting int               `json:"account_skipped_existing,omitempty"`
+	AccountFailed          int               `json:"account_failed"`
+	SourceFormat           string            `json:"source_format,omitempty"`
+	SourceAccountTotal     int               `json:"source_account_total,omitempty"`
+	SourceAccountFiltered  int               `json:"source_account_filtered,omitempty"`
+	SourceAccountInvalid   int               `json:"source_account_invalid,omitempty"`
+	Errors                 []DataImportError `json:"errors,omitempty"`
 }
 
 type DataImportError struct {
@@ -312,7 +318,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			Concurrency:          item.Concurrency,
 			Priority:             item.Priority,
 			RateMultiplier:       item.RateMultiplier,
-			GroupIDs:             nil,
+			GroupIDs:             item.GroupIDs,
 			ExpiresAt:            item.ExpiresAt,
 			AutoPauseOnExpired:   item.AutoPauseOnExpired,
 			SkipDefaultGroupBind: skipDefaultGroupBind,
