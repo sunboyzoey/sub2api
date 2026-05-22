@@ -214,10 +214,10 @@
             class="input md:col-span-2"
             type="text"
             placeholder="搜索订单号"
-            @keyup.enter="loadOrders"
+            @keyup.enter="applyOrderFilters"
           />
           <div class="md:col-span-2 xl:col-span-4 flex gap-2">
-            <button class="btn btn-primary" type="button" @click="loadOrders">查询</button>
+            <button class="btn btn-primary" type="button" @click="applyOrderFilters">查询</button>
             <button class="btn btn-secondary" type="button" @click="resetOrderFilters">重置</button>
           </div>
         </div>
@@ -297,7 +297,7 @@
                   v-if="selectedOrderDetail && selectedOrderDetail.order.id === item.id"
                   class="border-t border-gray-100 bg-gray-50/80 dark:border-dark-700 dark:bg-dark-900/60"
                 >
-                  <td colspan="8" class="p-4">
+                  <td colspan="9" class="p-4">
                     <div class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-800">
                       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div>
@@ -366,13 +366,23 @@
                 </tr>
               </template>
               <tr v-if="orders.length === 0">
-                <td colspan="8" class="py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+                <td colspan="9" class="py-10 text-center text-sm text-gray-500 dark:text-gray-400">
                   暂无订单记录
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          v-if="orderPagination.total > 0"
+          class="mt-4"
+          :page="orderPagination.page"
+          :total="orderPagination.total"
+          :page-size="orderPagination.page_size"
+          @update:page="handleOrderPageChange"
+          @update:pageSize="handleOrderPageSizeChange"
+        />
       </section>
     </div>
   </AppLayout>
@@ -381,7 +391,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import Pagination from '@/components/common/Pagination.vue'
 import adminAPI from '@/api/admin'
+import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import type {
   SalesMapping,
   SalesOrder,
@@ -432,6 +444,11 @@ const orderFilters = reactive({
   partner_id: 0,
   status: '',
   search: ''
+})
+const orderPagination = reactive({
+  page: 1,
+  page_size: getPersistedPageSize(),
+  total: 0
 })
 const selectedOrderIds = ref<Set<number>>(new Set())
 
@@ -962,13 +979,20 @@ async function loadBaseData() {
 
 async function loadOrders() {
   try {
-    const data = await adminAPI.sales.listOrders(1, 100, {
+    const data = await adminAPI.sales.listOrders(orderPagination.page, orderPagination.page_size, {
       partner_id: orderFilters.partner_id || undefined,
       status: orderFilters.status || undefined,
       search: orderFilters.search || undefined
     })
     orders.value = data.items
+    orderPagination.total = data.total
+    orderPagination.page = data.page
+    orderPagination.page_size = data.page_size
     selectedOrderIds.value.clear()
+    if (orderPagination.total > 0 && orders.value.length === 0 && orderPagination.page > 1) {
+      orderPagination.page = Math.max(1, data.pages || Math.ceil(orderPagination.total / orderPagination.page_size))
+      await loadOrders()
+    }
   } catch (error) {
     setNotice(formatError(error), 'error')
   }
@@ -1189,6 +1213,23 @@ function resetOrderFilters() {
   orderFilters.partner_id = 0
   orderFilters.status = ''
   orderFilters.search = ''
+  orderPagination.page = 1
+  void loadOrders()
+}
+
+function applyOrderFilters() {
+  orderPagination.page = 1
+  void loadOrders()
+}
+
+function handleOrderPageChange(page: number) {
+  orderPagination.page = page
+  void loadOrders()
+}
+
+function handleOrderPageSizeChange(pageSize: number) {
+  orderPagination.page_size = pageSize
+  orderPagination.page = 1
   void loadOrders()
 }
 
@@ -1245,7 +1286,11 @@ async function handleDeleteOrder(order: SalesOrder) {
   if (!window.confirm(`确认删除订单 ${order.external_order_id} 吗？此操作仅删除订单记录，不回收订阅或 Key。`)) return
   clearNotice()
   try {
+    const shouldStepBack = orders.value.length === 1 && orderPagination.page > 1
     await adminAPI.sales.deleteOrder(order.id)
+    if (shouldStepBack) {
+      orderPagination.page -= 1
+    }
     if (isOrderDetailOpen(order.id)) {
       closeOrderDetail()
     }
@@ -1261,7 +1306,11 @@ async function handleBatchDeleteOrders() {
   if (!window.confirm(`确认批量删除 ${ids.length} 条订单记录？此操作仅删除订单记录，不回收订阅或 Key。`)) return
   clearNotice()
   try {
+    const shouldStepBack = ids.length >= orders.value.length && orderPagination.page > 1
     await adminAPI.sales.batchDeleteOrders({ ids })
+    if (shouldStepBack) {
+      orderPagination.page -= 1
+    }
     if (selectedOrderDetail.value && selectedOrderIds.value.has(selectedOrderDetail.value.order.id)) {
       closeOrderDetail()
     }
