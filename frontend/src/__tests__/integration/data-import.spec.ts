@@ -134,7 +134,7 @@ describe('ImportDataModal', () => {
     await Promise.resolve()
 
     expect(adminAPI.accounts.importDataUpload).toHaveBeenCalledWith({
-      file,
+      files: [file],
       skip_default_group_bind: true,
       include_email_domains: ['outlook.com', 'gmail.com'],
       template_account_id: 123
@@ -198,10 +198,50 @@ describe('ImportDataModal', () => {
     await Promise.resolve()
 
     expect(adminAPI.accounts.importDataUpload).toHaveBeenCalledWith({
-      file,
+      files: [file],
       skip_default_group_bind: true,
       include_email_domains: ['outlook.com'],
       template_account_id: 456
+    })
+    expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
+  })
+
+  it('多个 JSON 文件时调用上传导入接口', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    vi.mocked(adminAPI.accounts.importDataUpload).mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 2,
+      account_skipped_existing: 0,
+      account_failed: 0
+    })
+
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
+    })
+
+    const input = wrapper.find('input[type="file"]')
+    const firstFile = new File(['{"type":"codex"}'], 'first.json', { type: 'application/json' })
+    const secondFile = new File(['{"type":"codex"}'], 'second.json', { type: 'application/json' })
+    Object.defineProperty(input.element, 'files', {
+      value: [firstFile, secondFile]
+    })
+
+    await input.trigger('change')
+    await wrapper.find('form').trigger('submit')
+    await Promise.resolve()
+
+    expect(adminAPI.accounts.importDataUpload).toHaveBeenCalledWith({
+      files: [firstFile, secondFile],
+      skip_default_group_bind: true,
+      include_email_domains: [],
+      template_account_id: undefined
     })
     expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
   })

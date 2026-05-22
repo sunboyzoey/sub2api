@@ -430,6 +430,178 @@ func TestImportDataUploadFiltersDomainsAndSkipsExisting(t *testing.T) {
 	require.Equal(t, 2, resp.Data.SourceAccountFiltered)
 }
 
+func TestImportDataUploadConvertsCodexJSONAndAppliesAutoTemplateDefaults(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	rateMultiplier := 1.25
+	adminSvc.accounts = []service.Account{
+		{
+			ID:                 999,
+			Name:               "template@outlook.com",
+			Platform:           service.PlatformOpenAI,
+			Type:               service.AccountTypeOAuth,
+			GroupIDs:           []int64{2, 3, 4},
+			Concurrency:        6,
+			Priority:           8,
+			RateMultiplier:     &rateMultiplier,
+			AutoPauseOnExpired: false,
+			Status:             service.StatusActive,
+		},
+	}
+
+	raw, err := json.Marshal(buildTestCodexSource("demo@outlook.com", "acc-demo", "team"))
+	require.NoError(t, err)
+
+	body, contentType := buildMultipartUpload(t, "file", "codex.json", raw, map[string]string{
+		"include_email_domains": "outlook.com",
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data/upload", body)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, adminSvc.createdAccounts, 1)
+	created := adminSvc.createdAccounts[0]
+	require.Equal(t, "demo@outlook.com", created.Name)
+	require.Equal(t, service.PlatformOpenAI, created.Platform)
+	require.Equal(t, service.AccountTypeOAuth, created.Type)
+	require.True(t, created.SkipDefaultGroupBind)
+	require.Equal(t, []int64{2, 3, 4}, created.GroupIDs)
+	require.Equal(t, 6, created.Concurrency)
+	require.Equal(t, 8, created.Priority)
+	require.NotNil(t, created.RateMultiplier)
+	require.Equal(t, 1.25, *created.RateMultiplier)
+	require.NotNil(t, created.AutoPauseOnExpired)
+	require.False(t, *created.AutoPauseOnExpired)
+	require.Equal(t, "team", created.Credentials["plan_type"])
+	require.Equal(t, "acc-demo", created.Credentials["chatgpt_account_id"])
+	require.Equal(t, "org-demo", created.Credentials["organization_id"])
+	require.Equal(t, "training_off", created.Extra["privacy_mode"])
+	require.Equal(t, true, created.Extra["openai_passthrough"])
+	require.Equal(t, "Codex User", created.Extra["name"])
+	require.Equal(t, "Imported from codex.json", *created.Notes)
+
+	var resp dataImportResultResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "codex-json", resp.Data.SourceFormat)
+	require.Equal(t, 1, resp.Data.SourceAccountTotal)
+	require.Equal(t, 1, resp.Data.AccountCreated)
+	require.Equal(t, 0, resp.Data.AccountSkippedExisting)
+}
+
+func TestImportDataUploadConvertsCodexJSONArrayAndSkipsExisting(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	rateMultiplier := 1.5
+	adminSvc.accounts = []service.Account{
+		{
+			ID:                 999,
+			Name:               "template@outlook.com",
+			Platform:           service.PlatformOpenAI,
+			Type:               service.AccountTypeOAuth,
+			GroupIDs:           []int64{8, 9},
+			Concurrency:        4,
+			Priority:           7,
+			RateMultiplier:     &rateMultiplier,
+			AutoPauseOnExpired: true,
+			Status:             service.StatusActive,
+		},
+		{
+			ID:          1000,
+			Name:        "exist@outlook.com",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Credentials: map[string]any{"email": "exist@outlook.com"},
+		},
+	}
+
+	raw, err := json.Marshal([]cpaOAuthSource{
+		buildTestCodexSource("exist@outlook.com", "acc-exist", "plus"),
+		buildTestCodexSource("new@outlook.com", "acc-new", "team"),
+	})
+	require.NoError(t, err)
+
+	body, contentType := buildMultipartUpload(t, "file", "codex-batch.json", raw, map[string]string{
+		"include_email_domains": "outlook.com",
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data/upload", body)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, adminSvc.createdAccounts, 1)
+	created := adminSvc.createdAccounts[0]
+	require.Equal(t, "new@outlook.com", created.Name)
+	require.Equal(t, []int64{8, 9}, created.GroupIDs)
+	require.Equal(t, 4, created.Concurrency)
+	require.Equal(t, 7, created.Priority)
+	require.NotNil(t, created.RateMultiplier)
+	require.Equal(t, 1.5, *created.RateMultiplier)
+	require.NotNil(t, created.AutoPauseOnExpired)
+	require.True(t, *created.AutoPauseOnExpired)
+	require.Equal(t, "Imported from codex-batch.json", *created.Notes)
+
+	var resp dataImportResultResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "codex-json-array", resp.Data.SourceFormat)
+	require.Equal(t, 2, resp.Data.SourceAccountTotal)
+	require.Equal(t, 1, resp.Data.AccountCreated)
+	require.Equal(t, 1, resp.Data.AccountSkippedExisting)
+}
+
+func TestImportDataUploadAcceptsMultipleCodexFiles(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	rateMultiplier := 1.5
+	adminSvc.accounts = []service.Account{
+		{
+			ID:                 999,
+			Name:               "template@outlook.com",
+			Platform:           service.PlatformOpenAI,
+			Type:               service.AccountTypeOAuth,
+			GroupIDs:           []int64{8, 9},
+			Concurrency:        4,
+			Priority:           7,
+			RateMultiplier:     &rateMultiplier,
+			AutoPauseOnExpired: true,
+			Status:             service.StatusActive,
+		},
+	}
+
+	firstRaw, err := json.Marshal(buildTestCodexSource("first@outlook.com", "acc-first", "plus"))
+	require.NoError(t, err)
+	secondRaw, err := json.Marshal(buildTestCodexSource("second@outlook.com", "acc-second", "team"))
+	require.NoError(t, err)
+
+	body, contentType := buildMultipartUploadFiles(t, "file", []uploadTestFile{
+		{Name: "first.json", Content: firstRaw},
+		{Name: "second.json", Content: secondRaw},
+	}, map[string]string{
+		"include_email_domains": "outlook.com",
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data/upload", body)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, adminSvc.createdAccounts, 2)
+	require.Equal(t, "first@outlook.com", adminSvc.createdAccounts[0].Name)
+	require.Equal(t, "second@outlook.com", adminSvc.createdAccounts[1].Name)
+	require.Equal(t, []int64{8, 9}, adminSvc.createdAccounts[0].GroupIDs)
+	require.Equal(t, []int64{8, 9}, adminSvc.createdAccounts[1].GroupIDs)
+
+	var resp dataImportResultResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "codex-json", resp.Data.SourceFormat)
+	require.Equal(t, 2, resp.Data.SourceAccountTotal)
+	require.Equal(t, 2, resp.Data.AccountCreated)
+	require.Equal(t, 0, resp.Data.AccountSkippedExisting)
+}
+
 func buildMultipartUpload(t *testing.T, fieldName, fileName string, content []byte, formFields map[string]string) (*bytes.Buffer, string) {
 	t.Helper()
 	var body bytes.Buffer
@@ -441,6 +613,28 @@ func buildMultipartUpload(t *testing.T, fieldName, fileName string, content []by
 	require.NoError(t, err)
 	_, err = part.Write(content)
 	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	return &body, writer.FormDataContentType()
+}
+
+type uploadTestFile struct {
+	Name    string
+	Content []byte
+}
+
+func buildMultipartUploadFiles(t *testing.T, fieldName string, files []uploadTestFile, formFields map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range formFields {
+		require.NoError(t, writer.WriteField(key, value))
+	}
+	for _, file := range files {
+		part, err := writer.CreateFormFile(fieldName, file.Name)
+		require.NoError(t, err)
+		_, err = part.Write(file.Content)
+		require.NoError(t, err)
+	}
 	require.NoError(t, writer.Close())
 	return &body, writer.FormDataContentType()
 }
@@ -466,4 +660,35 @@ func buildTestJWT(payload map[string]any) string {
 	body, _ := json.Marshal(payload)
 	claims := base64.RawURLEncoding.EncodeToString(body)
 	return strings.Join([]string{header, claims, "sig"}, ".")
+}
+
+func buildTestCodexSource(email, accountID, planType string) cpaOAuthSource {
+	authClaims := map[string]any{
+		"chatgpt_account_id":                accountID,
+		"chatgpt_user_id":                   "user-" + strings.ReplaceAll(strings.SplitN(email, "@", 2)[0], ".", "-"),
+		"chatgpt_plan_type":                 planType,
+		"chatgpt_subscription_active_until": "2026-05-26T12:08:54+00:00",
+		"organizations": []map[string]any{
+			{"id": "org-demo", "is_default": true},
+		},
+	}
+	return cpaOAuthSource{
+		Type:         "codex",
+		Email:        email,
+		Expired:      "2026-05-26T12:08:54+00:00",
+		IDToken:      buildTestJWT(map[string]any{"email": email, "name": "Codex User", "https://api.openai.com/auth": authClaims}),
+		AccountID:    accountID,
+		AccessToken:  buildTestJWT(map[string]any{"exp": 1778069305, "client_id": openai.ClientID, "https://api.openai.com/auth": authClaims, "https://api.openai.com/profile": map[string]any{"email": email}}),
+		RefreshToken: "rt_" + strings.ReplaceAll(email, "@", "_"),
+		GeneratedAt:  "2026-04-26T12:08:25Z",
+		LastRefresh:  "2026-04-26T13:38:28+08:00",
+		Provider:     "manual_browser",
+		OAuthFlow:    "manual_browser",
+		OAuthTokenResponse: map[string]any{
+			"token_type": "bearer",
+			"expires_in": 864000,
+			"scope":      "openid profile email offline_access",
+			"account_id": accountID,
+		},
+	}
 }

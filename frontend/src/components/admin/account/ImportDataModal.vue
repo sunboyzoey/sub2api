@@ -23,7 +23,7 @@
         >
           <div class="min-w-0">
             <div class="truncate text-sm text-gray-700 dark:text-dark-200">
-              {{ fileName || t('admin.accounts.dataImportSelectFile') }}
+              {{ fileLabel || t('admin.accounts.dataImportSelectFile') }}
             </div>
             <div class="text-xs text-gray-500 dark:text-dark-400">
               {{ t('admin.accounts.dataImportFileTypes') }}
@@ -38,6 +38,7 @@
           type="file"
           class="hidden"
           accept="application/json,.json,application/zip,.zip"
+          multiple
           @change="handleFileChange"
         />
       </div>
@@ -140,7 +141,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const importing = ref(false)
-const file = ref<File | null>(null)
+const files = ref<File[]>([])
 const result = ref<AdminDataImportResult | null>(null)
 const includeEmailDomains = ref('')
 const templateAccountId = ref('')
@@ -148,7 +149,15 @@ const templateAccountsLoading = ref(false)
 const templateAccountOptions = ref<Array<{ id: number; label: string }>>([])
 
 const fileInput = ref<HTMLInputElement | null>(null)
-const fileName = computed(() => file.value?.name || '')
+const fileLabel = computed(() => {
+  if (files.value.length === 0) {
+    return ''
+  }
+  if (files.value.length === 1) {
+    return files.value[0].name
+  }
+  return t('admin.accounts.dataImportFilesSelected', { count: files.value.length })
+})
 
 const errorItems = computed(() => result.value?.errors || [])
 
@@ -158,7 +167,7 @@ const openFilePicker = () => {
 
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
-  file.value = target.files?.[0] || null
+  files.value = Array.from(target.files || [])
 }
 
 const handleClose = () => {
@@ -216,7 +225,7 @@ watch(
   () => props.show,
   (open) => {
     if (open) {
-      file.value = null
+      files.value = []
       result.value = null
       includeEmailDomains.value = ''
       templateAccountId.value = ''
@@ -248,24 +257,24 @@ const readFileAsText = async (sourceFile: File): Promise<string> => {
 }
 
 const handleImport = async () => {
-  if (!file.value) {
+  if (files.value.length === 0) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
     return
   }
 
   importing.value = true
   try {
+    const selectedFiles = files.value
     const uploadPayload = {
-      file: file.value,
+      files: selectedFiles,
       skip_default_group_bind: true,
       include_email_domains: parseEmailDomains(includeEmailDomains.value),
       template_account_id: templateAccountId.value ? Number(templateAccountId.value) : undefined
     }
 
-    const res = isZipFile(file.value)
-      ? await adminAPI.accounts.importDataUpload(uploadPayload)
-      : await (async () => {
-          const text = await readFileAsText(file.value as File)
+    const res = selectedFiles.length === 1 && !isZipFile(selectedFiles[0])
+      ? await (async () => {
+          const text = await readFileAsText(selectedFiles[0] as File)
           const parsed = JSON.parse(text)
           if (looksLikeAdminDataPayload(parsed)) {
             return adminAPI.accounts.importData({
@@ -275,6 +284,7 @@ const handleImport = async () => {
           }
           return adminAPI.accounts.importDataUpload(uploadPayload)
         })()
+      : await adminAPI.accounts.importDataUpload(uploadPayload)
 
     result.value = res
 

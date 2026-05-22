@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -31,6 +32,7 @@ type dataUploadParseMeta struct {
 }
 
 type cpaOAuthSource struct {
+	Type               string         `json:"type"`
 	Email              string         `json:"email"`
 	Expired            string         `json:"expired"`
 	IDToken            string         `json:"id_token"`
@@ -38,6 +40,9 @@ type cpaOAuthSource struct {
 	AccessToken        string         `json:"access_token"`
 	RefreshToken       string         `json:"refresh_token"`
 	GeneratedAt        string         `json:"generated_at"`
+	LastRefresh        string         `json:"last_refresh"`
+	Provider           string         `json:"provider"`
+	OAuthFlow          string         `json:"oauth_flow"`
 	OAuthTokenResponse map[string]any `json:"oauth_token_response"`
 }
 
@@ -58,27 +63,16 @@ type uploadTemplateDefaults struct {
 	AutoPauseOnExpired *bool
 }
 
-// ImportDataUpload accepts either sub2api export JSON or CPA OAuth JSON/ZIP and imports it.
+// ImportDataUpload accepts either sub2api export JSON or CPA/Codex OAuth JSON/ZIP and imports it.
 func (h *AccountHandler) ImportDataUpload(c *gin.Context) {
 	if err := c.Request.ParseMultipartForm(dataImportUploadMaxBytes); err != nil {
 		response.BadRequest(c, "Invalid upload: "+err.Error())
 		return
 	}
 
-	file, fileHeader, err := c.Request.FormFile("file")
+	fileHeaders, err := collectUploadFileHeaders(c.Request.MultipartForm)
 	if err != nil {
-		response.BadRequest(c, "file is required")
-		return
-	}
-	defer file.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(file, dataImportUploadMaxBytes+1))
-	if err != nil {
-		response.BadRequest(c, "Failed to read uploaded file")
-		return
-	}
-	if len(raw) > dataImportUploadMaxBytes {
-		response.BadRequest(c, fmt.Sprintf("uploaded file exceeds %d bytes", dataImportUploadMaxBytes))
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -94,97 +88,177 @@ func (h *AccountHandler) ImportDataUpload(c *gin.Context) {
 		return
 	}
 
-	payload, meta, err := parseUploadedDataFile(fileHeader.Filename, raw, includeDomains)
-	if err != nil {
-		response.BadRequest(c, err.Error())
-		return
+	mergedPayload := DataPayload{
+		Proxies:  []DataProxy{},
+		Accounts: []DataAccount{},
 	}
-	if err := validateDataHeader(payload); err != nil {
-		response.BadRequest(c, err.Error())
-		return
+	externalAccounts := make([]DataAccount, 0)
+	externalMeta := dataUploadParseMeta{}
+	fileNames := make([]string, 0, len(fileHeaders))
+	sourceFormats := make([]string, 0, len(fileHeaders))
+	hasExternal := false
+
+	for _, fileHeader := range fileHeaders {
+		raw, readErr := readUploadedFile(fileHeader)
+		if readErr != nil {
+			response.BadRequest(c, readErr.Error())
+			return
+		}
+
+		payload, meta, parseErr := parseUploadedDataFile(fileHeader.Filename, raw, includeDomains)
+		if parseErr != nil {
+			response.BadRequest(c, parseErr.Error())
+			return
+		}
+		if validateErr := validateDataHeader(payload); validateErr != nil {
+			response.BadRequest(c, validateErr.Error())
+			return
+		}
+
+		fileNames = append(fileNames, filepath.Base(fileHeader.Filename))
+		if meta.sourceFormat != "" {
+			sourceFormats = append(sourceFormats, meta.sourceFormat)
+		}
+		mergedPayload.Proxies = append(mergedPayload.Proxies, payload.Proxies...)
+		if isExternalOAuthUploadSourceFormat(meta.sourceFormat) {
+			hasExternal = true
+			externalAccounts = append(externalAccounts, payload.Accounts...)
+			mergeDataUploadMeta(&externalMeta, meta)
+			continue
+		}
+		mergedPayload.Accounts = append(mergedPayload.Accounts, payload.Accounts...)
 	}
 
-	if meta.sourceFormat == "cpa-json" || meta.sourceFormat == "cpa-zip" {
+	skippedExisting := 0
+	if hasExternal {
 		templateDefaults, groupErr := h.resolveUploadTemplateDefaults(c.Request.Context(), templateAccountID, service.PlatformOpenAI, service.AccountTypeOAuth)
 		if groupErr != nil {
 			response.BadRequest(c, groupErr.Error())
 			return
 		}
 		if templateDefaults != nil {
-			applyUploadTemplateDefaults(payload.Accounts, templateDefaults)
+			applyUploadTemplateDefaults(externalAccounts, templateDefaults)
 		}
 
-		existingEmails, listErr := h.collectExistingOpenAIOAuthEmails(c.Request.Context())
-		if listErr != nil {
-			response.BadRequest(c, "Failed to inspect existing OpenAI OAuth accounts")
+		filteredAccounts, filteredExisting, filteredDuplicates, filterErr := h.filterUploadedExternalAccounts(c.Request.Context(), externalAccounts)
+		if filterErr != nil {
+			response.BadRequest(c, filterErr.Error())
 			return
 		}
-		filteredAccounts := make([]DataAccount, 0, len(payload.Accounts))
-		skippedExisting := 0
-		for _, account := range payload.Accounts {
-			email := extractDataAccountEmail(account)
-			if email != "" {
-				if _, ok := existingEmails[email]; ok {
-					skippedExisting++
-					continue
-				}
-			}
-			filteredAccounts = append(filteredAccounts, account)
-		}
-		payload.Accounts = filteredAccounts
-		meta.sourceFiltered += skippedExisting
+		skippedExisting = filteredExisting
+		externalMeta.sourceFiltered += filteredExisting + filteredDuplicates
+		mergedPayload.Accounts = append(mergedPayload.Accounts, filteredAccounts...)
+	}
 
-		req := DataImportRequest{
-			Data:                 payload,
-			SkipDefaultGroupBind: &skipDefaultGroupBind,
-		}
-		idempotencyPayload := struct {
-			FileName             string      `json:"file_name"`
-			SkipDefaultGroupBind bool        `json:"skip_default_group_bind"`
-			IncludeEmailDomains  []string    `json:"include_email_domains,omitempty"`
-			TemplateAccountID    *int64      `json:"template_account_id,omitempty"`
-			Data                 DataPayload `json:"data"`
-			SourceFormat         string      `json:"source_format"`
-		}{
-			FileName:             fileHeader.Filename,
-			SkipDefaultGroupBind: skipDefaultGroupBind,
-			IncludeEmailDomains:  includeDomains,
-			TemplateAccountID:    templateAccountID,
-			Data:                 payload,
-			SourceFormat:         meta.sourceFormat,
-		}
-
-		executeAdminIdempotentJSON(c, "admin.accounts.import_data_upload", idempotencyPayload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
-			result, importErr := h.importData(ctx, req)
-			if importErr != nil {
-				return nil, importErr
-			}
-			result.AccountSkippedExisting = skippedExisting
-			result.SourceFormat = meta.sourceFormat
-			result.SourceAccountTotal = meta.sourceAccountTotal
-			result.SourceAccountFiltered = meta.sourceFiltered
-			result.SourceAccountInvalid = meta.sourceInvalid
-			if len(meta.preImportErrors) > 0 {
-				result.AccountFailed += len(meta.preImportErrors)
-				result.Errors = append(slices.Clone(meta.preImportErrors), result.Errors...)
-			}
-			return result, nil
-		})
+	if err := validateDataHeader(mergedPayload); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	req := DataImportRequest{
-		Data:                 payload,
+		Data:                 mergedPayload,
 		SkipDefaultGroupBind: &skipDefaultGroupBind,
 	}
-	executeAdminIdempotentJSON(c, "admin.accounts.import_data_upload", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+	idempotencyPayload := struct {
+		FileNames            []string    `json:"file_names"`
+		SkipDefaultGroupBind bool        `json:"skip_default_group_bind"`
+		IncludeEmailDomains  []string    `json:"include_email_domains,omitempty"`
+		TemplateAccountID    *int64      `json:"template_account_id,omitempty"`
+		Data                 DataPayload `json:"data"`
+		SourceFormat         string      `json:"source_format,omitempty"`
+	}{
+		FileNames:            fileNames,
+		SkipDefaultGroupBind: skipDefaultGroupBind,
+		IncludeEmailDomains:  includeDomains,
+		TemplateAccountID:    templateAccountID,
+		Data:                 mergedPayload,
+		SourceFormat:         mergeSourceFormats(sourceFormats),
+	}
+
+	executeAdminIdempotentJSON(c, "admin.accounts.import_data_upload", idempotencyPayload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		result, importErr := h.importData(ctx, req)
 		if importErr != nil {
 			return nil, importErr
 		}
-		result.SourceFormat = meta.sourceFormat
+		result.SourceFormat = mergeSourceFormats(sourceFormats)
+		if hasExternal {
+			result.AccountSkippedExisting = skippedExisting
+			result.SourceAccountTotal = externalMeta.sourceAccountTotal
+			result.SourceAccountFiltered = externalMeta.sourceFiltered
+			result.SourceAccountInvalid = externalMeta.sourceInvalid
+			if len(externalMeta.preImportErrors) > 0 {
+				result.AccountFailed += len(externalMeta.preImportErrors)
+				result.Errors = append(slices.Clone(externalMeta.preImportErrors), result.Errors...)
+			}
+		}
 		return result, nil
 	})
+}
+
+func collectUploadFileHeaders(form *multipart.Form) ([]*multipart.FileHeader, error) {
+	if form == nil {
+		return nil, fmt.Errorf("file is required")
+	}
+	headers := append([]*multipart.FileHeader{}, form.File["file"]...)
+	if len(headers) == 0 {
+		headers = append(headers, form.File["files"]...)
+	}
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("file is required")
+	}
+	return headers, nil
+}
+
+func readUploadedFile(fileHeader *multipart.FileHeader) ([]byte, error) {
+	if fileHeader == nil {
+		return nil, fmt.Errorf("file is required")
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open uploaded file: %s", fileHeader.Filename)
+	}
+	defer file.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(file, dataImportUploadMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read uploaded file: %s", fileHeader.Filename)
+	}
+	if len(raw) > dataImportUploadMaxBytes {
+		return nil, fmt.Errorf("uploaded file exceeds %d bytes: %s", dataImportUploadMaxBytes, fileHeader.Filename)
+	}
+	return raw, nil
+}
+
+func mergeDataUploadMeta(dst *dataUploadParseMeta, src dataUploadParseMeta) {
+	if dst == nil {
+		return
+	}
+	dst.sourceAccountTotal += src.sourceAccountTotal
+	dst.sourceFiltered += src.sourceFiltered
+	dst.sourceInvalid += src.sourceInvalid
+	if len(src.preImportErrors) > 0 {
+		dst.preImportErrors = append(dst.preImportErrors, src.preImportErrors...)
+	}
+}
+
+func mergeSourceFormats(sourceFormats []string) string {
+	if len(sourceFormats) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(sourceFormats))
+	merged := make([]string, 0, len(sourceFormats))
+	for _, sourceFormat := range sourceFormats {
+		sourceFormat = strings.TrimSpace(sourceFormat)
+		if sourceFormat == "" {
+			continue
+		}
+		if _, ok := seen[sourceFormat]; ok {
+			continue
+		}
+		seen[sourceFormat] = struct{}{}
+		merged = append(merged, sourceFormat)
+	}
+	return strings.Join(merged, ",")
 }
 
 func parseUploadBoolWithDefault(raw string, defaultValue bool) (bool, error) {
@@ -242,19 +316,10 @@ func parseUploadedDataFile(fileName string, raw []byte, includeDomains []string)
 	}
 
 	baseName := filepath.Base(fileName)
-	if account, ok := tryParseCPAOAuthJSON(raw); ok {
-		payload, meta, err := convertCPAEntriesToPayload(baseName, []cpaSourceEntry{
-			{
-				fileName:    baseName,
-				email:       normalizeEmail(account.Email),
-				generatedAt: parseRFC3339Unix(account.GeneratedAt),
-				source:      account,
-			},
-		}, includeDomains)
+	if payload, meta, ok, err := tryParseUploadedOAuthJSON(baseName, raw, includeDomains); ok {
 		if err != nil {
 			return DataPayload{}, dataUploadParseMeta{}, err
 		}
-		meta.sourceFormat = "cpa-json"
 		return payload, meta, nil
 	}
 
@@ -272,6 +337,67 @@ func parseUploadedDataFile(fileName string, raw []byte, includeDomains []string)
 	}
 
 	return DataPayload{}, dataUploadParseMeta{}, fmt.Errorf("unsupported file format: %s", baseName)
+}
+
+func tryParseUploadedOAuthJSON(
+	baseName string,
+	raw []byte,
+	includeDomains []string,
+) (DataPayload, dataUploadParseMeta, bool, error) {
+	if account, ok := tryParseCPAOAuthJSON(raw); ok {
+		payload, meta, err := convertCPAEntriesToPayload(baseName, []cpaSourceEntry{
+			{
+				fileName:    baseName,
+				email:       normalizeEmail(account.Email),
+				generatedAt: parseRFC3339Unix(account.GeneratedAt),
+				source:      account,
+			},
+		}, includeDomains)
+		if err != nil {
+			return DataPayload{}, dataUploadParseMeta{}, true, err
+		}
+		meta.sourceFormat = detectOAuthJSONSourceFormat(account)
+		return payload, meta, true, nil
+	}
+
+	var sources []cpaOAuthSource
+	if err := json.Unmarshal(raw, &sources); err != nil || len(sources) == 0 {
+		return DataPayload{}, dataUploadParseMeta{}, false, nil
+	}
+
+	entries := make([]cpaSourceEntry, 0, len(sources))
+	allCodex := true
+	sawCodex := false
+	for idx, source := range sources {
+		if !isValidUploadedOAuthSource(source) {
+			return DataPayload{}, dataUploadParseMeta{}, false, nil
+		}
+		if isCodexOAuthSource(source) {
+			sawCodex = true
+		} else {
+			allCodex = false
+		}
+		entries = append(entries, cpaSourceEntry{
+			fileName:    fmt.Sprintf("%s[%d]", baseName, idx),
+			email:       normalizeEmail(source.Email),
+			generatedAt: parseRFC3339Unix(source.GeneratedAt),
+			source:      source,
+		})
+	}
+
+	payload, meta, err := convertCPAEntriesToPayload(baseName, entries, includeDomains)
+	if err != nil {
+		return DataPayload{}, dataUploadParseMeta{}, true, err
+	}
+	switch {
+	case allCodex:
+		meta.sourceFormat = "codex-json-array"
+	case sawCodex:
+		meta.sourceFormat = "oauth-json-array"
+	default:
+		meta.sourceFormat = "cpa-json-array"
+	}
+	return payload, meta, true, nil
 }
 
 func tryParseDataPayloadJSON(raw []byte) (DataPayload, bool) {
@@ -293,10 +419,36 @@ func tryParseCPAOAuthJSON(raw []byte) (cpaOAuthSource, bool) {
 	if err := json.Unmarshal(raw, &source); err != nil {
 		return cpaOAuthSource{}, false
 	}
-	if normalizeEmail(source.Email) == "" || strings.TrimSpace(source.AccessToken) == "" || strings.TrimSpace(source.RefreshToken) == "" {
+	if !isValidUploadedOAuthSource(source) {
 		return cpaOAuthSource{}, false
 	}
 	return source, true
+}
+
+func isValidUploadedOAuthSource(source cpaOAuthSource) bool {
+	return normalizeEmail(source.Email) != "" &&
+		strings.TrimSpace(source.AccessToken) != "" &&
+		strings.TrimSpace(source.RefreshToken) != ""
+}
+
+func isCodexOAuthSource(source cpaOAuthSource) bool {
+	return strings.EqualFold(strings.TrimSpace(source.Type), "codex")
+}
+
+func detectOAuthJSONSourceFormat(source cpaOAuthSource) string {
+	if isCodexOAuthSource(source) {
+		return "codex-json"
+	}
+	return "cpa-json"
+}
+
+func isExternalOAuthUploadSourceFormat(sourceFormat string) bool {
+	switch sourceFormat {
+	case "cpa-json", "cpa-json-array", "cpa-zip", "codex-json", "codex-json-array", "oauth-json-array":
+		return true
+	default:
+		return false
+	}
 }
 
 func isZipArchive(raw []byte) bool {
@@ -730,6 +882,69 @@ func (h *AccountHandler) collectExistingOpenAIOAuthEmails(ctx context.Context) (
 		}
 	}
 	return out, nil
+}
+
+func (h *AccountHandler) filterUploadedExternalAccounts(
+	ctx context.Context,
+	accounts []DataAccount,
+) ([]DataAccount, int, int, error) {
+	existingEmails, err := h.collectExistingOpenAIOAuthEmails(ctx)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("Failed to inspect existing OpenAI OAuth accounts")
+	}
+
+	deduped := make([]DataAccount, 0, len(accounts))
+	indexByEmail := make(map[string]int, len(accounts))
+	skippedDuplicates := 0
+	for _, account := range accounts {
+		email := extractDataAccountEmail(account)
+		if email == "" {
+			deduped = append(deduped, account)
+			continue
+		}
+		if idx, ok := indexByEmail[email]; ok {
+			skippedDuplicates++
+			if preferUploadedExternalAccount(deduped[idx], account) {
+				deduped[idx] = account
+			}
+			continue
+		}
+		indexByEmail[email] = len(deduped)
+		deduped = append(deduped, account)
+	}
+
+	filteredAccounts := make([]DataAccount, 0, len(deduped))
+	skippedExisting := 0
+	for _, account := range deduped {
+		email := extractDataAccountEmail(account)
+		if email != "" {
+			if _, ok := existingEmails[email]; ok {
+				skippedExisting++
+				continue
+			}
+		}
+		filteredAccounts = append(filteredAccounts, account)
+	}
+	return filteredAccounts, skippedExisting, skippedDuplicates, nil
+}
+
+func preferUploadedExternalAccount(current, candidate DataAccount) bool {
+	currentExpiresAt := uploadAccountExpiresAt(current)
+	candidateExpiresAt := uploadAccountExpiresAt(candidate)
+	if candidateExpiresAt != currentExpiresAt {
+		return candidateExpiresAt > currentExpiresAt
+	}
+	return true
+}
+
+func uploadAccountExpiresAt(account DataAccount) int64 {
+	if expiresAt := intField(account.Credentials, "expires_at"); expiresAt > 0 {
+		return expiresAt
+	}
+	if account.ExpiresAt != nil {
+		return *account.ExpiresAt
+	}
+	return 0
 }
 
 func (h *AccountHandler) resolveUploadTemplateDefaults(ctx context.Context, templateAccountID *int64, platform, accountType string) (*uploadTemplateDefaults, error) {

@@ -545,13 +545,15 @@ export async function importData(payload: {
 }
 
 export async function importDataUpload(payload: {
-  file: File
+  files: File[]
   skip_default_group_bind?: boolean
   include_email_domains?: string[]
   template_account_id?: number
 }): Promise<AdminDataImportResult> {
   const formData = new FormData()
-  formData.append('file', payload.file)
+  for (const file of payload.files) {
+    formData.append('file', file)
+  }
   if (typeof payload.skip_default_group_bind === 'boolean') {
     formData.append('skip_default_group_bind', String(payload.skip_default_group_bind))
   }
