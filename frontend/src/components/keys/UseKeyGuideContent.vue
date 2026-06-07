@@ -505,20 +505,21 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
   const configContent = `model_provider = "OpenAI"
-model = "gpt-5.4"
-review_model = "gpt-5.4"
+model = "gpt-5.5"
+review_model = "gpt-5.5"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
-model_context_window = 1000000
-model_auto_compact_token_limit = 900000
 
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = "${baseUrl}"
 wire_api = "responses"
-requires_openai_auth = true`
+requires_openai_auth = true
+
+[features]
+goals = true`
 
   const authContent = `{
   "OPENAI_API_KEY": "${apiKey}"
@@ -542,14 +543,12 @@ function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
   const configContent = `model_provider = "OpenAI"
-model = "gpt-5.4"
-review_model = "gpt-5.4"
+model = "gpt-5.5"
+review_model = "gpt-5.5"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
-model_context_window = 1000000
-model_auto_compact_token_limit = 900000
 
 [model_providers.OpenAI]
 name = "OpenAI"
@@ -559,7 +558,8 @@ supports_websockets = true
 requires_openai_auth = true
 
 [features]
-responses_websockets_v2 = true`
+responses_websockets_v2 = true
+goals = true`
 
   const authContent = `{
   "OPENAI_API_KEY": "${apiKey}"
@@ -589,6 +589,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
   }
   const openaiModels = {
     'gpt-5.2': { name: 'GPT-5.2', limit: { context: 400000, output: 128000 }, options: { store: false }, variants: { low: {}, medium: {}, high: {}, xhigh: {} } },
+    'gpt-5.5': { name: 'GPT-5.5', limit: { context: 1050000, output: 128000 }, options: { store: false }, variants: { low: {}, medium: {}, high: {}, xhigh: {} } },
     'gpt-5.4': { name: 'GPT-5.4', limit: { context: 1050000, output: 128000 }, options: { store: false }, variants: { low: {}, medium: {}, high: {}, xhigh: {} } },
     'gpt-5.4-mini': { name: 'GPT-5.4 Mini', limit: { context: 400000, output: 128000 }, options: { store: false }, variants: { low: {}, medium: {}, high: {}, xhigh: {} } },
     'gpt-5.3-codex-spark': { name: 'GPT-5.3 Codex Spark', limit: { context: 128000, output: 32000 }, options: { store: false }, variants: { low: {}, medium: {}, high: {}, xhigh: {} } },
@@ -599,6 +600,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'gemini-2.0-flash': { name: 'Gemini 2.0 Flash', limit: { context: 1048576, output: 65536 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] } },
     'gemini-2.5-flash': { name: 'Gemini 2.5 Flash', limit: { context: 1048576, output: 65536 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] } },
     'gemini-2.5-pro': { name: 'Gemini 2.5 Pro', limit: { context: 2097152, output: 65536 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, options: { thinking: { budgetTokens: 24576, type: 'enabled' } } },
+    'gemini-3.5-flash': { name: 'Gemini 3.5 Flash', limit: { context: 1048576, output: 65536 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] } },
     'gemini-3-flash-preview': { name: 'Gemini 3 Flash Preview', limit: { context: 1048576, output: 65536 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] } },
     'gemini-3-pro-preview': { name: 'Gemini 3 Pro Preview', limit: { context: 1048576, output: 65536 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, options: { thinking: { budgetTokens: 24576, type: 'enabled' } } },
     'gemini-3.1-pro-preview': { name: 'Gemini 3.1 Pro Preview', limit: { context: 1048576, output: 65536 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, options: { thinking: { budgetTokens: 24576, type: 'enabled' } } }
